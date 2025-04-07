@@ -5,30 +5,28 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\NasabahResource\Pages;
 use App\Models\Nasabah;
 use Filament\Forms;
-use Filament\Forms\Components\Card;
-use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
+use Filament\Tables\Actions\Action;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Filament\Tables;
-use Filament\Tables\Filters\SelectFilter;
 use Illuminate\Support\Facades\Storage;
+use League\Csv\Reader;
 
 class NasabahResource extends Resource
 {
     protected static ?string $model = Nasabah::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-user-group';
-
     protected static ?string $navigationLabel = 'Data Nasabah';
-
     protected static ?string $navigationGroup = 'Manajemen Nasabah';
-
     protected static ?string $slug = 'nasabah';
+
     public static function getPluralLabel(): string
     {
         return 'Nasabah';
@@ -45,8 +43,6 @@ class NasabahResource extends Resource
             Section::make()->schema([
                 TextInput::make('noPin')
                     ->label('No. Pin Nasabah')
-                    // Rule unique masih bisa dipakai sebagai back-up validasi,
-                    // tapi validasi realtime ini yang memberikan notifikasi.
                     ->unique(table: Nasabah::class, ignoreRecord: true)
                     ->required()
                     ->afterStateUpdated(function (callable $set, $state) {
@@ -57,7 +53,6 @@ class NasabahResource extends Resource
                                 ->danger()
                                 ->send();
 
-                            // Opsional: Mengosongkan field agar user harus memasukkan nilai baru.
                             $set('noPin', '');
                         }
                     }),
@@ -84,16 +79,6 @@ class NasabahResource extends Resource
 
                 TextInput::make('rak_aplikasi')
                     ->label('Rak Aplikasi'),
-
-                FileUpload::make('file')
-                    ->label('Dokumen')
-                    ->directory('nasabah-files')
-                    ->acceptedFileTypes([
-                        'application/pdf',
-                        'application/msword',
-                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                    ])
-                    ->maxSize(10240),
             ]),
         ]);
     }
@@ -132,16 +117,6 @@ class NasabahResource extends Resource
                     ->searchable()
                     ->sortable(),
 
-                // Kolom untuk dokumen
-                Tables\Columns\TextColumn::make('file')
-                    ->label('Dokumen')
-                    ->formatStateUsing(function ($state, $record) {
-                        return $state
-                            ? '<a href="' . Storage::url($record->file) . '" target="_blank" class="inline-flex items-center px-2 py-1 text-xs font-medium leading-4 text-white bg-blue-600 rounded-md hover:bg-blue-500">Lihat Dokumen</a>'
-                            : '-';
-                    })
-                    ->html(),
-
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('Tanggal Input')
                     ->dateTime('d/m/Y H:i')
@@ -154,6 +129,55 @@ class NasabahResource extends Resource
                         'Aktif' => 'Aktif',
                         'Lunas' => 'Lunas',
                     ]),
+            ])
+            ->headerActions([
+                Action::make('download-template')
+                    ->label('Download Template')
+                    ->icon('heroicon-o-arrow-down-tray')
+                    ->url(asset('template_nasabah.csv'))
+                    ->openUrlInNewTab(),
+
+                Action::make('import-data')
+                    ->label('Import Data')
+                    ->icon('heroicon-o-arrow-up-tray')
+                    ->form([
+                        Forms\Components\FileUpload::make('import_file')
+                            ->label('File CSV')
+                            ->acceptedFileTypes(['text/csv'])
+                            ->directory('temp-uploads')
+                            ->required(),
+                    ])
+                    ->action(function (array $data) {
+                        // Pastikan Anda telah menginstall league/csv:
+                        // composer require league/csv
+                        $filePath = $data['import_file'];
+                        $absolutePath = Storage::disk('public')->path($filePath);
+
+                        $csv = Reader::createFromPath($absolutePath, 'r');
+                        $csv->setDelimiter(';');
+                        $csv->setHeaderOffset(0);
+                        $records = $csv->getRecords();
+
+                        foreach ($records as $record) {
+                            // Asumsikan CSV memiliki header: noPin, nama, branch, status, gudang, rak_aplikasi
+                            Nasabah::updateOrCreate(
+                                ['noPin' => $record['noPin']],
+                                [
+                                    'nama'          => $record['nama'],
+                                    'branch'        => $record['branch'],
+                                    'status'        => $record['status'],
+                                    'gudang'        => $record['gudang'] ?? null,
+                                    'rak_aplikasi'  => $record['rak_aplikasi'] ?? null,
+                                ]
+                            );
+                        }
+
+                        Notification::make()
+                            ->title('Sukses')
+                            ->body('Data nasabah berhasil diimport.')
+                            ->success()
+                            ->send();
+                    }),
             ])
             ->defaultSort('created_at', 'desc')
             ->actions([
@@ -168,9 +192,9 @@ class NasabahResource extends Resource
     public static function getPages(): array
     {
         return [
-            'index' => Pages\ListNasabahs::route('/'),
+            'index'  => Pages\ListNasabahs::route('/'),
             'create' => Pages\CreateNasabah::route('/create'),
-            'edit' => Pages\EditNasabah::route('/{record}/edit'),
+            'edit'   => Pages\EditNasabah::route('/{record}/edit'),
         ];
     }
 }
